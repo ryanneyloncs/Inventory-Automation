@@ -1,0 +1,8 @@
+# ML Models (too large for git)
+*.pkl
+*.h5
+*.joblib
+
+# Keep the directory structure and README
+!README.md
+!model_info.json
