@@ -1,0 +1,90 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: inventory-api-metrics
+  namespace: inventory-system
+  labels:
+    app: inventory-api
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: inventory-api
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+      scheme: http
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: inventory-alerts
+  namespace: inventory-system
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: inventory-api
+      interval: 30s
+      rules:
+        - alert: HighErrorRate
+          expr: |
+            sum(rate(http_requests_total{status=~"5.."}[5m])) 
+            / 
+            sum(rate(http_requests_total[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High error rate detected"
+            description: "Error rate is {{ $value | humanizePercentage }}"
+        
+        - alert: HighLatency
+          expr: |
+            histogram_quantile(0.95, 
+              rate(http_request_duration_seconds_bucket[5m])
+            ) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High API latency"
+            description: "95th percentile latency is {{ $value }}s"
+        
+        - alert: LowStockCritical
+          expr: inventory_low_stock_count > 10
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "Critical low stock levels"
+            description: "{{ $value }} products are critically low on stock"
+        
+        - alert: PodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total{
+              namespace="inventory-system"
+            }[15m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod is crash looping"
+            description: "Pod {{ $labels.pod }} is restarting frequently"
+        
+        - alert: HighMemoryUsage
+          expr: |
+            container_memory_usage_bytes{
+              namespace="inventory-system",
+              pod=~"inventory-api.*"
+            } 
+            / 
+            container_spec_memory_limit_bytes > 0.9
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High memory usage"
+            description: "Pod {{ $labels.pod }} memory usage is {{ $value | humanizePercentage }}"

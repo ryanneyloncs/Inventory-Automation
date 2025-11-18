@@ -1,0 +1,16 @@
+{
+  "product_id": 1,
+  "last_trained": "2024-10-28T00:00:00Z",
+  "training_samples": 730,
+  "models_available": [
+    "prophet",
+    "lstm",
+    "random_forest"
+  ],
+  "performance_metrics": {
+    "mae": 2.5,
+    "rmse": 3.2,
+    "mape": 8.5
+  },
+  "note": "Models will be trained on first forecast request. This is a placeholder."
+}

@@ -1,0 +1,166 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daily-optimization
+  namespace: inventory-automation
+spec:
+  schedule: "0 2 * * *"  # Run at 2 AM daily
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: optimizer
+            image: inventory-automation:latest
+            imagePullPolicy: Always
+            command:
+              - python
+              - -c
+              - |
+                import asyncio
+                from src.database import AsyncSessionLocal
+                from src.services.optimization.optimization_service import OptimizationService
+                
+                async def run():
+                    async with AsyncSessionLocal() as db:
+                        service = OptimizationService(db)
+                        result = await service.optimize_all_products()
+                        print(f"Optimized {result['successful']} products")
+                
+                asyncio.run(run())
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secret
+                  key: DATABASE_URL
+            envFrom:
+            - configMapRef:
+                name: api-config
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "250m"
+              limits:
+                memory: "2Gi"
+                cpu: "1000m"
+          restartPolicy: OnFailure
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: reorder-check
+  namespace: inventory-automation
+spec:
+  schedule: "0 */6 * * *"  # Run every 6 hours
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: reorder
+            image: inventory-automation:latest
+            imagePullPolicy: Always
+            command:
+              - python
+              - -c
+              - |
+                import asyncio
+                from src.database import AsyncSessionLocal
+                from src.services.reorder.reorder_service import ReorderService
+                
+                async def run():
+                    async with AsyncSessionLocal() as db:
+                        service = ReorderService(db)
+                        result = await service.process_automatic_reorders()
+                        print(f"Created {result['successful']} purchase orders")
+                
+                asyncio.run(run())
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secret
+                  key: DATABASE_URL
+            envFrom:
+            - configMapRef:
+                name: api-config
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "1Gi"
+                cpu: "500m"
+          restartPolicy: OnFailure
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: weekly-forecasting
+  namespace: inventory-automation
+spec:
+  schedule: "0 3 * * 0"  # Run at 3 AM every Sunday
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: forecaster
+            image: inventory-automation:latest
+            imagePullPolicy: Always
+            command:
+              - python
+              - -c
+              - |
+                import asyncio
+                from sqlalchemy import select
+                from src.database import AsyncSessionLocal
+                from src.services.forecasting.forecasting_service import ForecastingService
+                from src.models.database import Product
+                
+                async def run():
+                    async with AsyncSessionLocal() as db:
+                        query = select(Product).where(Product.is_active == True)
+                        result = await db.execute(query)
+                        products = result.scalars().all()
+                        
+                        for product in products:
+                            service = ForecastingService(db)
+                            await service.train_and_forecast(product.id, 90)
+                            print(f"Forecasted product {product.id}")
+                
+                asyncio.run(run())
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secret
+                  key: DATABASE_URL
+            envFrom:
+            - configMapRef:
+                name: api-config
+            volumeMounts:
+            - name: ml-models
+              mountPath: /app/ml_models
+            resources:
+              requests:
+                memory: "2Gi"
+                cpu: "1000m"
+              limits:
+                memory: "8Gi"
+                cpu: "4000m"
+          volumes:
+          - name: ml-models
+            persistentVolumeClaim:
+              claimName: ml-models-pvc
+          restartPolicy: OnFailure

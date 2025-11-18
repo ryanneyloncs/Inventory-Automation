@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: inventory-automation
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - redis.yaml
+  - api.yaml
+  - worker.yaml
+  - scheduler.yaml
+  - cronjobs.yaml
+  - monitoring.yaml
+  - ingress.yaml
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/name: inventory-automation
+  app.kubernetes.io/version: "1.0.0"
+  app.kubernetes.io/managed-by: kustomize
+
+# Image tag management
+images:
+  - name: inventory-automation
+    newName: your-registry.com/inventory-automation
+    newTag: latest
+
+# ConfigMap generator for environment-specific configs
+configMapGenerator:
+  - name: env-config
+    literals:
+      - DEPLOYMENT_ENV=production
+      - DEPLOYMENT_DATE=$(date +%Y%m%d)
+
+# Replicas for different environments
+replicas:
+  - name: api
+    count: 3
+  - name: worker
+    count: 2

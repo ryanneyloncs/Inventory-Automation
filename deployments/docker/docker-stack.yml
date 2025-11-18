@@ -1,0 +1,195 @@
+version: '3.8'
+
+# Docker Swarm Stack Configuration
+# Deploy with: docker stack deploy -c docker-stack.yml inventory
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB: inventory_db
+    secrets:
+      - db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - inventory_network
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - inventory_network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  api:
+    image: ${REGISTRY}/inventory-api:${VERSION:-latest}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:{{POSTGRES_PASSWORD}}@postgres:5432/inventory_db
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY_FILE: /run/secrets/api_secret_key
+    secrets:
+      - api_secret_key
+    ports:
+      - "8000:8000"
+    networks:
+      - inventory_network
+    volumes:
+      - ml_models:/app/ml_models
+    depends_on:
+      - postgres
+      - redis
+    deploy:
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.inventory.rule=Host(`api.inventory.local`)"
+        - "traefik.http.services.inventory.loadbalancer.server.port=8000"
+
+  worker:
+    image: ${REGISTRY}/inventory-api:${VERSION:-latest}
+    command: celery -A src.tasks worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:{{POSTGRES_PASSWORD}}@postgres:5432/inventory_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+    networks:
+      - inventory_network
+    volumes:
+      - ml_models:/app/ml_models
+    depends_on:
+      - postgres
+      - redis
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  scheduler:
+    image: ${REGISTRY}/inventory-api:${VERSION:-latest}
+    command: python scripts/scheduler.py
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:{{POSTGRES_PASSWORD}}@postgres:5432/inventory_db
+      REDIS_URL: redis://redis:6379/0
+    networks:
+      - inventory_network
+    depends_on:
+      - api
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+    volumes:
+      - prometheus_data:/prometheus
+    networks:
+      - inventory_network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+    secrets:
+      - grafana_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - inventory_network
+    depends_on:
+      - prometheus
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+networks:
+  inventory_network:
+    driver: overlay
+    attachable: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  ml_models:
+  prometheus_data:
+  grafana_data:
+
+secrets:
+  db_password:
+    external: true
+  api_secret_key:
+    external: true
+  grafana_password:
+    external: true
+
+configs:
+  prometheus_config:
+    file: ./prometheus.yml

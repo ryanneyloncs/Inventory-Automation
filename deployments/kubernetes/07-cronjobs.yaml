@@ -1,0 +1,234 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daily-optimization
+  namespace: inventory-system
+  labels:
+    app: scheduler
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: scheduler-optimization
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: optimizer
+              image: your-registry/inventory-api:latest
+              command:
+                - python
+                - -c
+                - |
+                  import asyncio
+                  from src.database import AsyncSessionLocal
+                  from src.services.optimization.optimization_service import OptimizationService
+                  
+                  async def run():
+                      async with AsyncSessionLocal() as db:
+                          service = OptimizationService(db)
+                          result = await service.optimize_all_products()
+                          print(f"Optimized {result['successful']} products")
+                  
+                  asyncio.run(run())
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: inventory-secrets
+                      key: DATABASE_URL
+              envFrom:
+                - configMapRef:
+                    name: inventory-config
+              resources:
+                requests:
+                  memory: "512Mi"
+                  cpu: "500m"
+                limits:
+                  memory: "2Gi"
+                  cpu: "2000m"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: reorder-check
+  namespace: inventory-system
+  labels:
+    app: scheduler
+spec:
+  schedule: "0 */6 * * *"  # Every 6 hours
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: scheduler-reorder
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: reorder
+              image: your-registry/inventory-api:latest
+              command:
+                - python
+                - -c
+                - |
+                  import asyncio
+                  from src.database import AsyncSessionLocal
+                  from src.services.reorder.reorder_service import ReorderService
+                  
+                  async def run():
+                      async with AsyncSessionLocal() as db:
+                          service = ReorderService(db)
+                          result = await service.process_automatic_reorders()
+                          print(f"Created {result['successful']} purchase orders")
+                  
+                  asyncio.run(run())
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: inventory-secrets
+                      key: DATABASE_URL
+              envFrom:
+                - configMapRef:
+                    name: inventory-config
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "1000m"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: weekly-forecasting
+  namespace: inventory-system
+  labels:
+    app: scheduler
+spec:
+  schedule: "0 3 * * 0"  # Sunday at 3 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: scheduler-forecast
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: forecaster
+              image: your-registry/inventory-api:latest
+              command:
+                - python
+                - -c
+                - |
+                  import asyncio
+                  from src.database import AsyncSessionLocal
+                  from src.services.forecasting.forecasting_service import ForecastingService
+                  from sqlalchemy import select
+                  from src.models.database import Product
+                  
+                  async def run():
+                      async with AsyncSessionLocal() as db:
+                          query = select(Product).where(Product.is_active == True)
+                          result = await db.execute(query)
+                          products = result.scalars().all()
+                          
+                          for product in products:
+                              service = ForecastingService(db)
+                              await service.train_and_forecast(product.id)
+                          
+                          print(f"Forecasted {len(products)} products")
+                  
+                  asyncio.run(run())
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: inventory-secrets
+                      key: DATABASE_URL
+              envFrom:
+                - configMapRef:
+                    name: inventory-config
+              volumeMounts:
+                - name: ml-models
+                  mountPath: /app/ml_models
+              resources:
+                requests:
+                  memory: "2Gi"
+                  cpu: "2000m"
+                limits:
+                  memory: "8Gi"
+                  cpu: "4000m"
+          volumes:
+            - name: ml-models
+              persistentVolumeClaim:
+                claimName: ml-models-pvc
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: low-stock-check
+  namespace: inventory-system
+  labels:
+    app: scheduler
+spec:
+  schedule: "0 */4 * * *"  # Every 4 hours
+  concurrencyPolicy: Allow
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: scheduler-alerts
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: alerts
+              image: your-registry/inventory-api:latest
+              command:
+                - python
+                - -c
+                - |
+                  import asyncio
+                  from src.database import AsyncSessionLocal
+                  from src.services.reorder.reorder_service import ReorderService
+                  
+                  async def run():
+                      async with AsyncSessionLocal() as db:
+                          service = ReorderService(db)
+                          alerts = await service.get_low_stock_alerts()
+                          print(f"Found {len(alerts)} low stock alerts")
+                  
+                  asyncio.run(run())
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: inventory-secrets
+                      key: DATABASE_URL
+              envFrom:
+                - configMapRef:
+                    name: inventory-config
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"

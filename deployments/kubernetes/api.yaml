@@ -1,0 +1,183 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: inventory-automation
+data:
+  APP_NAME: "Inventory Management Automation"
+  APP_VERSION: "1.0.0"
+  DEBUG: "False"
+  ENVIRONMENT: "production"
+  API_PREFIX: "/api/v1"
+  LOG_LEVEL: "INFO"
+  
+  # Database settings
+  DATABASE_POOL_SIZE: "20"
+  DATABASE_MAX_OVERFLOW: "40"
+  
+  # ML settings
+  FORECASTING_MODELS_PATH: "/app/ml_models/forecasting"
+  MODEL_RETRAIN_INTERVAL_DAYS: "7"
+  MIN_TRAINING_SAMPLES: "100"
+  FORECAST_HORIZON_DAYS: "90"
+  
+  # Optimization settings
+  HOLDING_COST_PERCENTAGE: "0.25"
+  ORDERING_COST: "50.0"
+  SERVICE_LEVEL: "0.95"
+  
+  # Reorder settings
+  AUTO_REORDER_ENABLED: "True"
+  REORDER_CHECK_INTERVAL_HOURS: "6"
+  
+  # Supplier API settings
+  SUPPLIER_API_TIMEOUT: "30"
+  SUPPLIER_API_RETRY_ATTEMPTS: "3"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-secret
+  namespace: inventory-automation
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql+asyncpg://postgres:your-secure-password-change-this@postgres:5432/inventory_db"
+  REDIS_URL: "redis://redis:6379/0"
+  SECRET_KEY: "change-this-secret-key-in-production-use-long-random-string"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ml-models-pvc
+  namespace: inventory-automation
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: inventory-automation
+  labels:
+    app: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+      - name: api
+        image: inventory-automation:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+        command:
+          - uvicorn
+          - src.api.routes:app
+          - --host
+          - "0.0.0.0"
+          - --port
+          - "8000"
+          - --workers
+          - "4"
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: api-secret
+              key: DATABASE_URL
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: api-secret
+              key: REDIS_URL
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-secret
+              key: SECRET_KEY
+        envFrom:
+        - configMapRef:
+            name: api-config
+        volumeMounts:
+        - name: ml-models
+          mountPath: /app/ml_models
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+      volumes:
+      - name: ml-models
+        persistentVolumeClaim:
+          claimName: ml-models-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: inventory-automation
+  labels:
+    app: api
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: api
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-hpa
+  namespace: inventory-automation
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
