@@ -379,7 +379,7 @@ Contributions welcome! Please:
 
 For issues and questions:
 - Create a GitHub issue
-- Email: support@example.com
+- Email: ryanneyloncs@gmail.com
 
 ---
 
