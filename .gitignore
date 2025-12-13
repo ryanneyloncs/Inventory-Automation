@@ -31,6 +31,9 @@ ENV/
 .env.local
 .env.production
 
+# Kubernetes Secrets (use .example files as templates)
+deployments/kubernetes/02-secrets.yaml
+
 # IDE
 .vscode/
 .idea/

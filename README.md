@@ -327,6 +327,39 @@ Expected performance metrics:
 - Rate limiting on API endpoints
 - Input validation on all endpoints
 
+### ⚠️ Pre-Deployment Security Checklist
+
+**Before deploying to production, you MUST:**
+
+1. **Create your secrets file from the template:**
+   ```bash
+   cp deployments/kubernetes/02-secrets.yaml.example deployments/kubernetes/02-secrets.yaml
+   ```
+
+2. **Replace ALL placeholder values** in these files:
+   - `.env` - Application secrets
+   - `deployments/kubernetes/02-secrets.yaml` - Kubernetes secrets
+   - `docker-compose.yml` - Development passwords (if using in production)
+
+3. **Run the validation script:**
+   ```bash
+   python scripts/validate_secrets.py
+   ```
+   This script checks for common placeholder patterns and will fail if any are found.
+
+4. **Generate secure values:**
+   ```bash
+   # Generate a secure SECRET_KEY
+   python -c "import secrets; print(secrets.token_urlsafe(32))"
+   
+   # Generate a secure database password
+   python -c "import secrets; print(secrets.token_urlsafe(24))"
+   ```
+
+5. **Never commit real secrets to git.** The following files are gitignored:
+   - `.env`
+   - `deployments/kubernetes/02-secrets.yaml`
+
 ## Troubleshooting
 
 ### Database Connection Issues
